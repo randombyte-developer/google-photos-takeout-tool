@@ -26,6 +26,6 @@ application {
 }
 
 tasks.withType<ShadowJar> {
-    archiveBaseName.set("gp-takeout-tool.jar")
+    archiveBaseName.set("gp-takeout-tool")
     archiveClassifier.set("")
 }
