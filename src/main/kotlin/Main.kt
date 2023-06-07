@@ -15,7 +15,7 @@ fun main(args: Array<String>) {
 
     val internalFileRegex = Regex("/Photos from \\d{4}/")
 
-    data class FileEntry(val path: String, val filename: String, val hash: String)
+    data class FileEntry(val path: String, val filename: String, val hash: String, val sizeBytes: Long)
 
     val mediaFiles = File(sourceFolder).walkTopDown()
         .filter { it.isFile }
@@ -31,7 +31,7 @@ fun main(args: Array<String>) {
         val jobs = mediaFiles.map { file ->
             launch {
                 val hash = calculateMD5Hash(file)
-                val entry = FileEntry(path = file.path, filename = file.name, hash = hash)
+                val entry = FileEntry(path = file.path, filename = file.name, hash = hash, sizeBytes = file.length())
                 if (file.path.contains(internalFileRegex)) {
                     mediaFilesInternal += entry
                 } else {
@@ -41,8 +41,8 @@ fun main(args: Array<String>) {
         }
 
         while (jobs.any { it.isActive }) {
-            println("${jobs.count { it.isActive }} Jobs sind aktiv")
-            delay(1000)
+            println("${jobs.count { it.isActive }} Jobs are active")
+            delay(5000)
         }
     }
 
@@ -62,6 +62,46 @@ fun main(args: Array<String>) {
             writer.newLine()
         }
     }
+
+    val externalFileAvailableAsInternalFile = mediaFilesExternal.filter { external ->
+        mediaFilesInternal.any { internal ->
+            external.filename == internal.filename && external.hash == internal.hash
+        }
+    }
+
+    println("${externalFileAvailableAsInternalFile.size} files are available externally and internally. Deleting them...")
+
+    val deletedFiles = mutableListOf<FileEntry>()
+    runBlocking {
+        val jobs = externalFileAvailableAsInternalFile.map { file ->
+            launch {
+                val mediaFile = File(file.path)
+                println("Deleting ${mediaFile.absolutePath}")
+                if (!mediaFile.delete()) {
+                    throw Exception("Can't delete file ${mediaFile.absolutePath}!")
+                }
+                deletedFiles += file
+
+                val jsonFile = mediaFile.parentFile.resolve("${mediaFile.name}.json")
+                if (jsonFile.exists()) {
+                    println("Deleting ${jsonFile.absolutePath}")
+                    if (!jsonFile.delete()) {
+                        throw Exception("Can't delete file ${jsonFile.absolutePath}!")
+                    }
+                } else {
+                    println("JSON file ${jsonFile.absolutePath} doesn't exist!")
+                }
+            }
+        }
+
+        while (jobs.any { it.isActive }) {
+            println("${jobs.count { it.isActive }} Löschjobs are active") //187,6
+            delay(5000)
+        }
+    }
+
+    val deletedFilesGigabytes = deletedFiles.sumOf { it.sizeBytes } / 1000 / 1000
+    println("Deleted ${deletedFiles.size} media files which are $deletedFilesGigabytes MB")
 }
 
 suspend fun calculateMD5Hash(file: File): String = withContext(Dispatchers.IO) {
