@@ -16,6 +16,7 @@ repositories {
 dependencies {
     implementation("commons-codec:commons-codec:1.15")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.1")
+    implementation("com.drewnoakes:metadata-extractor:2.19.0")
 }
 
 kotlin {

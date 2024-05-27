@@ -2,9 +2,14 @@
 
 package de.randombyte.gptakeouttool
 
+import com.drew.imaging.ImageMetadataReader
+import com.drew.metadata.Metadata
+import com.drew.metadata.exif.ExifSubIFDDirectory
 import kotlinx.coroutines.*
 import org.apache.commons.codec.digest.DigestUtils
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 import kotlin.system.exitProcess
 import kotlin.time.ExperimentalTime
 
@@ -14,6 +19,7 @@ data class FileEntry(
     val path: String,
     val filenameWithoutExtension: String,
     val extension: String,
+    val creationDate: Date?,
     val hash: String,
     val sizeBytes: Long
 ) {
@@ -30,8 +36,13 @@ fun assertFolderExists(path: String): File {
     return folder
 }
 
-suspend fun calculateMD5Hash(file: File): String = withContext(Dispatchers.IO) {
-    file.inputStream().buffered().use { DigestUtils.md5Hex(it) }
+fun readMediaCreationDate(bytes: ByteArray): Date? {
+    try {
+        val metadata: Metadata? = ImageMetadataReader.readMetadata(bytes.inputStream())
+        return metadata?.getFirstDirectoryOfType(ExifSubIFDDirectory::class.java)?.dateOriginal
+    } catch (ex: Exception) {
+        return null
+    }
 }
 
 fun main(args: Array<String>) = runBlocking {
@@ -51,12 +62,14 @@ fun main(args: Array<String>) = runBlocking {
     println("Found ${mediaFiles.size} media files")
 
     val fileEntriesJobs = mediaFiles.map { file ->
-        async {
+        async(Dispatchers.IO) {
+            val bytes = file.readBytes()
             FileEntry(
                 path = file.path,
                 filenameWithoutExtension = file.nameWithoutExtension,
                 extension = file.extension,
-                hash = calculateMD5Hash(file),
+                creationDate = readMediaCreationDate(bytes),
+                hash = DigestUtils.md5Hex(bytes),
                 sizeBytes = file.length()
             )
         }
@@ -75,18 +88,31 @@ fun main(args: Array<String>) = runBlocking {
         .map { it.value.first() } // only pick one instance of a file, regardless in which folder it is
     println("${uniqueFiles.size} unique files")
 
-    val groupedByFilenames = uniqueFiles.groupBy { it.filename }
+    val filesWithoutCreationDate = uniqueFiles.filter { it.creationDate == null }
+    println("Found ${filesWithoutCreationDate.size} files without a creation date!")
+
+    val filesWithCreationDate = uniqueFiles.filter { it.creationDate != null }
+
+    val groupedByFilenames = filesWithCreationDate.groupBy { it.filename }
     val duplicatedFilenames = groupedByFilenames.filter { it.value.size > 1 }
     println("Found ${duplicatedFilenames.size} duplicated files names")
+
+    val yearFormatter = SimpleDateFormat("yyy")
+    val monthFormatter = SimpleDateFormat("mm")
 
     val jobs = groupedByFilenames.flatMap { group ->
         val isFileNameDuplicated = group.value.size > 1
         group.value.mapIndexed { i, fileEntry ->
-            launch {
+            launch(Dispatchers.IO) {
                 val originalFile = File(fileEntry.path)
+
+                val year = yearFormatter.format(fileEntry.creationDate)
+                val month = monthFormatter.format(fileEntry.creationDate)
+
                 val suffix = if (isFileNameDuplicated) "_${i + 1}" else ""
                 val newFilename = "${fileEntry.filenameWithoutExtension}$suffix.${fileEntry.extension}"
-                val movedFile = destinationFolder.resolve(newFilename)
+                val movedFile = destinationFolder.resolve(year).resolve(month).resolve(newFilename)
+                movedFile.parentFile.mkdirs()
                 originalFile.renameTo(movedFile)
             }
         }
